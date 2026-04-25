@@ -1,0 +1,10 @@
+all:
+  hosts:
+    vps:
+      ansible_host: your-vps-ip
+      ansible_user: your-user
+      ansible_ssh_private_key_file: ~/.ssh/id_rsa
+  vars:
+    app_dir: /opt/app
+    repo_url: https://github.com/your-username/your-repo.git
+    model_url: ""

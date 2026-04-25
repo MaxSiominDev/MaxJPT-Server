@@ -1,0 +1,147 @@
+---
+- name: Update and upgrade apt packages
+  apt:
+    update_cache: yes
+    upgrade: dist
+
+- name: Install prerequisites for Docker repo
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+
+- name: Add Docker GPG key
+  shell: |
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+  args:
+    creates: /etc/apt/keyrings/docker.gpg
+
+- name: Add Docker apt repository
+  shell: |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+    > /etc/apt/sources.list.d/docker.list
+  args:
+    creates: /etc/apt/sources.list.d/docker.list
+
+- name: Install Docker and tools
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+      - git
+      - ufw
+    state: present
+    update_cache: yes
+
+- name: Allow SSH
+  ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+
+- name: Allow HTTP
+  ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+
+- name: Enable ufw (deny everything else)
+  ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+- name: Start and enable Docker
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Add deploy user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Reset SSH connection so docker group takes effect
+  meta: reset_connection
+
+- name: Create app directory
+  file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Clone application repository
+  git:
+    repo: "{{ repo_url }}"
+    dest: "{{ app_dir }}"
+    force: yes
+  become_user: "{{ ansible_user }}"
+
+- name: Create model directory
+  file:
+    path: "{{ app_dir }}/model"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Read stored model URL
+  slurp:
+    src: "{{ app_dir }}/model/.model_url"
+  register: stored_url_raw
+  ignore_errors: yes
+
+- name: Download model file
+  get_url:
+    url: "{{ model_url }}"
+    dest: "{{ app_dir }}/model/{{ model_url | basename }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+    timeout: 3600
+  when: >
+    model_url != "" and (
+      stored_url_raw is failed or
+      (stored_url_raw.content | b64decode | trim) != model_url
+    )
+
+- name: Store current model URL
+  copy:
+    content: "{{ model_url }}"
+    dest: "{{ app_dir }}/model/.model_url"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+  when: >
+    model_url != "" and (
+      stored_url_raw is failed or
+      (stored_url_raw.content | b64decode | trim) != model_url
+    )
+
+- name: Create data directory
+  file:
+    path: "{{ app_dir }}/data"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Copy .env file
+  copy:
+    src: files/.env
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+

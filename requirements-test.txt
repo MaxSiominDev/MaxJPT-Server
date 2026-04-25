@@ -1,0 +1,8 @@
+pytest
+pytest-asyncio
+httpx
+aiosqlite
+fastapi
+jinja2
+requests
+requests

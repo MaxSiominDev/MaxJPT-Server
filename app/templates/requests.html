@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Requests</title>
+  <style>
+    body {
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-family: monospace;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1.2rem;
+      margin-bottom: 1.5rem;
+      color: #aaa;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #333;
+      vertical-align: top;
+    }
+    th {
+      color: #888;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    td {
+      font-size: 0.9rem;
+      word-break: break-word;
+      max-width: 400px;
+    }
+    tr:hover td {
+      background: #222;
+    }
+    .id-col { width: 3rem; color: #666; }
+    .ts-col { width: 14rem; color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Request log</h1>
+  <table>
+    <thead>
+      <tr>
+        <th class="id-col">#</th>
+        <th class="ts-col">Timestamp</th>
+        <th>User prompt</th>
+        <th>Model response</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="id-col">{{ row.id }}</td>
+        <td class="ts-col">{{ row.timestamp }}</td>
+        <td>{{ row.user_prompt }}</td>
+        <td>{{ row.model_response }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4" style="color:#555; padding:1rem 0.75rem;">No requests yet.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

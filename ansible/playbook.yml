@@ -1,0 +1,6 @@
+---
+- name: Provision and deploy
+  hosts: vps
+  become: true
+  roles:
+    - deploy

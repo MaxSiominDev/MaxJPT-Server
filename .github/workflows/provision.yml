@@ -1,0 +1,62 @@
+# Provisioning runs automatically as part of the main CI/CD pipeline (deploy.yml).
+# This file is kept only as a manual fallback for re-provisioning without a full deploy.
+
+name: Provision VPS (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+
+      - name: Write inventory
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          MODEL_URL: ${{ secrets.MODEL_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          cat > ansible/inventory.yml << EOF
+          all:
+            hosts:
+              vps:
+                ansible_host: ${VPS_HOST}
+                ansible_user: ${VPS_USER}
+                ansible_ssh_private_key_file: /tmp/ssh_key
+            vars:
+              app_dir: /opt/app
+              repo_url: ${REPO_URL}
+              model_url: ${MODEL_URL}
+          EOF
+
+      - name: Create .env file for server
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+          MODEL_URL: ${{ secrets.MODEL_URL }}
+          PROMPT_URL: ${{ secrets.PROMPT_URL }}
+        run: |
+          mkdir -p ansible/files
+          {
+            echo "API_KEY=${API_KEY}"
+            echo "MODEL_URL=${MODEL_URL}"
+            echo "PROMPT_URL=${PROMPT_URL}"
+            echo "N_CTX=65536"
+            echo "N_THREADS=32"
+          } > ansible/files/.env
+
+      - name: Run Ansible playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "false"
+        run: ansible-playbook -i ansible/inventory.yml ansible/playbook.yml

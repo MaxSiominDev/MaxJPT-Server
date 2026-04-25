@@ -1,0 +1,164 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Run unit tests
+        env:
+          LLM_MOCK: "1"
+          API_KEY: test-key
+        run: pytest
+
+  provision:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+
+      - name: Write inventory
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          MODEL_URL: ${{ secrets.MODEL_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          cat > ansible/inventory.yml << EOF
+          all:
+            hosts:
+              vps:
+                ansible_host: ${VPS_HOST}
+                ansible_user: ${VPS_USER}
+                ansible_ssh_private_key_file: /tmp/ssh_key
+            vars:
+              app_dir: /opt/app
+              repo_url: ${REPO_URL}
+              model_url: ${MODEL_URL}
+          EOF
+
+      - name: Create .env file for server
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+          MODEL_URL: ${{ secrets.MODEL_URL }}
+          PROMPT_URL: ${{ secrets.PROMPT_URL }}
+        run: |
+          mkdir -p ansible/files
+          {
+            echo "API_KEY=${API_KEY}"
+            echo "MODEL_URL=${MODEL_URL}"
+            echo "PROMPT_URL=${PROMPT_URL}"
+            echo "N_CTX=65536"
+            echo "N_THREADS=32"
+          } > ansible/files/.env
+
+      - name: Run Ansible playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "false"
+        run: ansible-playbook -i ansible/inventory.yml ansible/playbook.yml
+
+  deploy:
+    needs: provision
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: API_KEY,MODEL_URL,PROMPT_URL
+          script: |
+            cd /opt/app
+            git pull
+            {
+              echo "API_KEY=${API_KEY}"
+              echo "MODEL_URL=${MODEL_URL}"
+              echo "PROMPT_URL=${PROMPT_URL}"
+              echo "N_CTX=65536"
+              echo "N_THREADS=32"
+            } > .env
+            MODEL_FILENAME=$(basename "$MODEL_URL")
+            STORED_URL=$(cat model/.model_url 2>/dev/null || echo "")
+            if [ "$STORED_URL" != "$MODEL_URL" ] || [ ! -f "model/$MODEL_FILENAME" ]; then
+              curl -fL -o "model/$MODEL_FILENAME" "$MODEL_URL"
+              echo "$MODEL_URL" > model/.model_url
+            fi
+            docker compose up -d --build --force-recreate
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+          MODEL_URL: ${{ secrets.MODEL_URL }}
+          PROMPT_URL: ${{ secrets.PROMPT_URL }}
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Wait for server to be ready
+        env:
+          SMOKE_URL: "http://${{ secrets.VPS_HOST }}"
+          API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          for i in $(seq 1 240); do
+            if curl -sf -H "X-API-Key: $API_KEY" "$SMOKE_URL/health" > /dev/null; then
+              echo "Server is up after $i attempts"
+              exit 0
+            fi
+            echo "Attempt $i/240: not ready, waiting 10s..."
+            sleep 10
+          done
+          echo "Server did not become ready in time"
+          exit 1
+
+      - name: Show container logs on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /opt/app
+            docker compose ps
+            docker compose logs --tail=100 app
+
+      - name: Run smoke tests
+        env:
+          SMOKE_URL: "http://${{ secrets.VPS_HOST }}"
+          API_KEY: ${{ secrets.API_KEY }}
+        run: pytest -m smoke

@@ -1,0 +1,10 @@
+model/
+data/
+.env
+scripts/.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.idea/
+cloud_functions/
